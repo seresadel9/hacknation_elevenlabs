@@ -1,0 +1,27 @@
+# secrets
+.env
+.env.local
+backend/.env
+frontend/.env.local
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+backend/*.db
+backend/*.db-*
+
+# node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# misc
+.DS_Store
+test-results/
+playwright-report/
