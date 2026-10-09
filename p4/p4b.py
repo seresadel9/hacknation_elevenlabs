@@ -1,43 +1,64 @@
-"""P4(b): cloud computing job assignment LP."""
-import numpy as np
+"""
+P4(b) - Cloud computing: assign 1000 jobs to 20 machines at minimum energy.
+
+Model:
+    min   sum_i sum_j c_ij * x_ij
+    s.t.  sum_j x_ij = 1        for every job i       (each job fully processed)
+          sum_i x_ij <= C_j     for every machine j   (machine capacity)
+          x_ij >= 0
+"""
 import pandas as pd
-from scipy.optimize import linprog
-from scipy.sparse import kron, eye, csr_matrix
+import pulp
 
-# ---- Data ----
-c = pd.read_csv("energy.csv", index_col=0).to_numpy()        # 1000 x 20, c_ij
-C = pd.read_csv("capacity.csv", index_col=0).to_numpy().ravel()  # 20, C_j
-n, m = c.shape
+# ---------- Load data ----------
+energy = pd.read_csv("energy.csv", index_col=0)      # rows = jobs, columns = machines
+capacity = pd.read_csv("capacity.csv", index_col=0)  # one capacity per machine
 
-# Decision variable x_ij flattened row-major: index = i*m + j
-cost = c.ravel()
+c = energy.values                  # c[i, j] = energy of job i on machine j
+C = capacity["capacity"].values    # C[j]    = capacity of machine j
 
-# Each job fully processed: sum_j x_ij = 1   (n equality rows)
-A_eq = kron(eye(n), np.ones((1, m)), format="csr")
-b_eq = np.ones(n)
+n_jobs, n_machines = c.shape
+jobs = range(n_jobs)
+machines = range(n_machines)
 
-# Machine capacity: sum_i x_ij <= C_j        (m inequality rows)
-A_ub = kron(np.ones((1, n)), eye(m), format="csr")
-b_ub = C
+# ---------- Build the LP ----------
+model = pulp.LpProblem("cloud_computing", pulp.LpMinimize)
 
-res = linprog(cost, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq,
-              bounds=(0, None), method="highs")
-assert res.status == 0, res.message
-x = res.x.reshape(n, m)
+# x[i, j] = fraction of job i processed on machine j
+x = {(i, j): pulp.LpVariable(f"x_{i}_{j}", lowBound=0)
+     for i in jobs for j in machines}
 
-# (i) optimal energy consumption
-print(f"(i)   Optimal energy consumption:            {res.fun:.4f}")
+# Objective: total energy consumption
+model += pulp.lpSum(c[i, j] * x[i, j] for i in jobs for j in machines)
 
-# (ii) no capacities: each job goes to its cheapest machine
-uncap = c.min(axis=1).sum()
-print(f"(ii)  Energy without capacity constraints:   {uncap:.4f}")
+# Each job must be fully processed
+for i in jobs:
+    model += pulp.lpSum(x[i, j] for j in machines) == 1, f"job_{i}"
 
-# (iii) jobs not (fully) assigned to their lowest-energy machine
-best = c.argmin(axis=1)
-not_best = np.sum(x[np.arange(n), best] < 1 - 1e-6)
-print(f"(iii) Jobs not fully on cheapest machine:    {not_best}")
+# Each machine can process at most C_j jobs
+for j in machines:
+    model += pulp.lpSum(x[i, j] for i in jobs) <= C[j], f"capacity_{j}"
 
-# Extras useful for parts (a)/(c)
-frac = np.sum((x > 1e-6) & (x < 1 - 1e-6))
-print(f"      Fractional x_ij entries:               {frac}")
-print(f"      Duals of capacity constraints (<=0):   {np.round(res.ineqlin.marginals, 3)}")
+# ---------- Solve ----------
+model.solve(pulp.PULP_CBC_CMD(msg=False))
+print("Status:", pulp.LpStatus[model.status])
+
+# (i) Optimal energy consumption
+optimal_energy = pulp.value(model.objective)
+print(f"(i)   Optimal energy consumption: {optimal_energy:.2f}")
+
+# (ii) Without capacities, each job simply goes to its cheapest machine
+uncapacitated_energy = sum(min(c[i, :]) for i in jobs)
+print(f"(ii)  Energy without capacity constraints: {uncapacitated_energy:.2f}")
+
+# (iii) Jobs not fully assigned to their lowest-energy machine
+not_on_best = 0
+for i in jobs:
+    best_machine = c[i, :].argmin()
+    if x[i, best_machine].value() < 0.999:   # small tolerance for rounding
+        not_on_best += 1
+print(f"(iii) Jobs not fully assigned to their cheapest machine: {not_on_best}")
+
+# Check whether the solution is integral (relevant for part a)
+fractional = sum(1 for v in x.values() if 0.001 < v.value() < 0.999)
+print(f"Number of fractional x_ij values: {fractional}")
